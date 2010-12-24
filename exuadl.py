@@ -2,15 +2,65 @@
 import re, sys, os, getopt, glob, shutil, urllib
 import subprocess
 import time
+import collections
+import threading
 
 __author__ = 'vbuell'
 
-class GetOutOfLoop( Exception ):
+# TODO:
+# - Add downloading resume for directory of links
+# - Add support for single files
+# - Store list of already downloaded files in working directory
+
+class WgetInstance():
+    def __init__(self, url):
+        self.percentage = 0
+        self.error = None
+        self.popen = subprocess.Popen("wget -c \"%s\"" % url, shell=True, stderr=subprocess.PIPE) #, stdout=subprocess.PIPE)
+        try:
+            # save last `number_of_lines` lines of the process output
+            number_of_lines = 200
+            self.q = collections.deque(maxlen=number_of_lines) # atomic .append()
+            t = threading.Thread(target=self.read_output, args=(self.popen, self.q.append))
+            t.daemon = True
+            t.start()
+#            time.sleep(2)
+        finally:
+            pass
+#            process.terminate() #NOTE: it doesn't ensure the process termination
+        # create thread with wget
+
+    def read_output(self, process, append):
+        for line in iter(process.stderr.readline, ""):
+            print "<<<", line
+            append(line)
+
+    def get_status(self):
+        """
+        Returns status and percentage of download.
+        """
+        return (self.percentage, self.error)
+
+    def get_output(self):
+        return '\n'.join(self.q)
+
+class GetOutOfLoop(Exception):
     pass
 
 def unique(seq, idfun=repr):
     seen = {}
     return [seen.setdefault(idfun(e),e) for e in seq if idfun(e) not in seen]
+
+def get_real_url(url):
+    while True:
+        try:
+            obj = urllib.urlopen(url)
+            real_url = obj.geturl()
+            return real_url
+        except IOError, e:
+            print e, "Retrying..."
+            continue
+
 
 def wget(url):
 #    global w
@@ -29,13 +79,12 @@ def wget(url):
     processes = []
 
     for url in urls:
-        obj = urllib.urlopen("http://www.ex.ua" + url)
-        real_url = obj.geturl()
-        filename = urllib.unquote(obj.geturl().split('/')[-1])
+        real_url = get_real_url("http://www.ex.ua" + url)
+        filename = urllib.unquote(real_url.split('/')[-1])
         obj.close()
 
         print "downloading %s as '%s'..." % (url, filename)
-        popen = subprocess.Popen("wget -c \"%s\"" % real_url, shell=True)
+        popen = subprocess.Popen("wget -c \"%s\"" % real_url, shell=True) #, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         processes.append(popen)
         if len(processes) >= threads:
             # Wait for process to be finished
@@ -46,9 +95,17 @@ def wget(url):
                         # the process has terminated.
                         print "wget instance is finished."
                         processes.remove(process)
+#                    else:
+#                        print "In else"
+#                        o = process.stdout.readline()
+#                        print "After stdout readline"
+#                        err = process.stderr.readline()
+#                        print "After stderr readline"
+#                        print o, err
+#                        if o == '' and process.poll() != None: break
                 if len(processes) < threads:
                     break
-                time.sleep(1)
+                time.sleep(0.5)
 
 
 #    with urllib.urlopen(url) as f:
