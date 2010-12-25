@@ -75,7 +75,12 @@ def wget(url):
     urls = unique(urls)
     print "Found " + str(len(urls)) + " entries."
 
-    threads = 1;
+    # Save in file
+    f = open(".exuadl", "w")
+    f.write(url)
+    f.close()
+
+    threads = 2
     processes = []
 
     for url in urls:
@@ -126,4 +131,13 @@ def wget(url):
 
                 # Real start
 
-wget(sys.argv[1])
+
+if len(sys.argv) == 1:
+    try:
+        f = open(".exuadl", "r")
+        url = f.readline()
+        wget(url)
+    except IOError:
+        print "Can't find saved session. Please "
+else:
+    wget(sys.argv[1])
