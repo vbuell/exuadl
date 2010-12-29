@@ -11,6 +11,7 @@ __author__ = 'vbuell'
 # - Add downloading resume for directory of links
 # - Add support for single files
 # - Store list of already downloaded files in working directory
+# - Ask user if resume file is already exists and new are gonna be created
 
 class AnsiFormatter(object):
     def fail(self, txt):
@@ -141,19 +142,27 @@ def get_real_url(url):
             print e, "Retrying..."
             continue
 
+def resolver(urls, real_filenames):
+    print "Resolver started."
+    for url in urls:
+        real_url = get_real_url("http://www.ex.ua" + url)
+        filename = urllib.unquote(real_url.split('/')[-1])
+        real_filenames[url] = real_url
 
 def wget(url):
-    print "Exuadl. Parallel downloader v0.30. http://code.google.com/p/exuadl/"
+    print "Exuadl v0.31. Parallel recursive downloader."
+    print "Homepage: http://code.google.com/p/exuadl/"
     print
 
     obj = urllib.urlopen(url)
     data = obj.read()
     obj.close()
     urls = re.findall(r'href=(?:"|\')(/get/[^"\']*)(?:"|\')', data)
+    obj.close()
 
     # Remove duplicates
     urls = unique(urls)
-    print "Found " + str(len(urls)) + " entries."
+    print "Found " + str(len(urls)) + " files to download."
 
     ansi = AnsiFormatter()
 
@@ -164,37 +173,43 @@ def wget(url):
 
     threads = 2
     processes = []
+    real_filenames = {}
 
-    for url in urls:
-        real_url = get_real_url("http://www.ex.ua" + url)
-        filename = urllib.unquote(real_url.split('/')[-1])
-        obj.close()
+    t = threading.Thread(target=resolver, args=(urls, real_filenames))
+    t.daemon = True
+    t.start()
 
-        print "downloading %s as '%s'..." % (url, filename)
-#        popen = subprocess.Popen("wget -c \"%s\"" % real_url, shell=True) #, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        popen = WgetInstance(real_url)
-        processes.append(popen)
-        if len(processes) >= threads:
-            # Wait for process to be finished
-            while True:
-                line = ""
-                for process in processes[:]:
-                    if process.is_terminated():
+    iterator = urls.__iter__()
+    current_url = iterator.next()
+    while 1:
+        if len(processes) < threads and current_url and current_url in real_filenames:
+            print "downloading %s as '%s'..." % (current_url, real_filenames[current_url])
+            popen = WgetInstance(real_filenames[current_url])
+            processes.append(popen)
+            try:
+                current_url = iterator.next()
+            except:
+                current_url = None
+
+        line = ""
+        for process in processes[:]:
+            if process.is_terminated():
 #                        print "wget instance is finished."
-                        processes.remove(process)
-                    out = process.get_output(clear=True)
-                    if out.strip() != "":
-                        print out
-                    line += str(process.get_status()) + "    "
-
-                if len(processes) < threads:
+                processes.remove(process)
+                if not current_url and len(processes) == 0:
                     break
+            out = process.get_output(clear=True)
+            if out.strip() != "":
+                print ansi.black2(out)
+            line += str(process.get_status()) + "    "
 
-                # Show progress
-                sys.stdout.write(ansi.ok(line) + "\r")
-                sys.stdout.flush()
+        # Show progress
+        sys.stdout.write(ansi.ok(line) + "\r")
+        sys.stdout.flush()
 
-                time.sleep(0.3)
+        time.sleep(0.3)
+
+    print "Finished."
 
 
 if len(sys.argv) == 1:
@@ -206,17 +221,3 @@ if len(sys.argv) == 1:
         print "Can't find saved session. Please specify url to start new download."
 else:
     wget(sys.argv[1])
-
-
-#w = WgetInstance("http://www.ex.ua/get/1494085")
-#while True:
-#    out = w.get_output(clear=True)
-#    if out.strip() != "":
-#        print out
-#    print w.get_status()
-#    if w.is_terminated():
-#        print "finished"
-#        break
-#    time.sleep(0.5)
-#
-#
