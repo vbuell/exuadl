@@ -14,6 +14,10 @@ __author__ = 'vbuell'
 # - Ask user if resume file is already exists and new are gonna be created
 
 class AnsiFormatter(object):
+    def __init__(self):
+        self.last_line_is_progress = False
+        self.last_line_len = 0
+
     def fail(self, txt):
         return "\033[31m"+txt+"\033[0m"
 
@@ -27,7 +31,7 @@ class AnsiFormatter(object):
     #    return "\033[7m"+txt+"\033[0m"
         return "\033[40m\033[37m"+txt+"\033[0m"
 
-    def ok(self, txt):
+    def green(self, txt):
         return "\033[32m"+txt+"\033[0m"
 
     def skip(self, txt):
@@ -47,6 +51,21 @@ class AnsiFormatter(object):
 
     def black0(self, txt):
         return "\033[97m"+txt+"\033[0m"
+
+    def print_progress(self, line):
+        if self.last_line_is_progress and len(line) < self.last_line_len:
+            sys.stdout.write(self.green(line) + " "*(self.last_line_len-len(line)) + "\r")
+        else:
+            sys.stdout.write(self.green(line) + "\r")
+        sys.stdout.flush()
+        self.last_line_is_progress = True
+        self.last_line_len = len(line)
+
+    def print_line(self, line):
+        if self.last_line_is_progress:
+            sys.stdout.write(" " * self.last_line_len + "\r")
+        print line
+        self.last_line_is_progress = False
 
 
 class WgetInstance():
@@ -109,6 +128,14 @@ class WgetInstance():
         """
         return (str(self.percentage) + "%", self.downloaded, self.speed)
 
+    def get_status_as_string(self):
+        """
+        Returns status and percentage of download as string.
+        """
+        if self.downloaded == 0:
+            return "[Starting... ]"
+        return "[%s, %s, %s]" % self.get_status()
+
     def get_output(self, clear=False):
         """
         TODO: Need to synchronize this
@@ -146,7 +173,6 @@ def resolver(urls, real_filenames):
     print "Resolver started."
     for url in urls:
         real_url = get_real_url("http://www.ex.ua" + url)
-        filename = urllib.unquote(real_url.split('/')[-1])
         real_filenames[url] = real_url
 
 def wget(url):
@@ -154,6 +180,7 @@ def wget(url):
     print "Homepage: http://code.google.com/p/exuadl/"
     print
 
+    sys.stdout.write("Fetching list of files to download... ")
     obj = urllib.urlopen(url)
     data = obj.read()
     obj.close()
@@ -162,7 +189,7 @@ def wget(url):
 
     # Remove duplicates
     urls = unique(urls)
-    print "Found " + str(len(urls)) + " files to download."
+    print "Found " + str(len(urls)) + " files."
 
     ansi = AnsiFormatter()
 
@@ -183,7 +210,8 @@ def wget(url):
     current_url = iterator.next()
     while 1:
         if len(processes) < threads and current_url and current_url in real_filenames:
-            print "downloading %s as '%s'..." % (current_url, real_filenames[current_url])
+            filename = urllib.unquote(real_filenames[current_url].split('/')[-1])
+            print "Downloading %s as '%s'..." % (current_url, filename)
             popen = WgetInstance(real_filenames[current_url])
             processes.append(popen)
             try:
@@ -200,12 +228,11 @@ def wget(url):
                     break
             out = process.get_output(clear=True)
             if out.strip() != "":
-                print ansi.black2(out)
-            line += str(process.get_status()) + "    "
+                ansi.print_line(ansi.black2(out))
+            line += str(process.get_status_as_string()) + "    "
 
         # Show progress
-        sys.stdout.write(ansi.ok(line) + "\r")
-        sys.stdout.flush()
+        ansi.print_progress(line)
 
         time.sleep(0.3)
 
