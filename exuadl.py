@@ -202,9 +202,12 @@ def wget(url):
     processes = []
     real_filenames = {}
 
-    t = threading.Thread(target=resolver, args=(urls, real_filenames))
-    t.daemon = True
-    t.start()
+    t1 = threading.Thread(target=resolver, args=(urls[::2], real_filenames))
+    t1.daemon = True
+    t1.start()
+    t2 = threading.Thread(target=resolver, args=(urls[1::2], real_filenames))
+    t2.daemon = True
+    t2.start()
 
     iterator = urls.__iter__()
     current_url = iterator.next()
@@ -224,8 +227,6 @@ def wget(url):
             if process.is_terminated():
 #                        print "wget instance is finished."
                 processes.remove(process)
-                if not current_url and len(processes) == 0:
-                    break
             out = process.get_output(clear=True)
             if out.strip() != "":
                 ansi.print_line(ansi.black2(out))
@@ -234,9 +235,12 @@ def wget(url):
         # Show progress
         ansi.print_progress(line)
 
+        if not current_url and len(processes) == 0:
+            break
+
         time.sleep(0.3)
 
-    print "Finished."
+    ansi.print_line("Finished.")
 
 
 if len(sys.argv) == 1:
