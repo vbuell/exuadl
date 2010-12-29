@@ -1,5 +1,5 @@
 #!/usr/bin/python
-import re, sys, os, getopt, glob, shutil, urllib
+import re, sys, urllib
 import subprocess
 import time
 import collections
@@ -87,7 +87,6 @@ class WgetInstance():
 #            process.terminate() #NOTE: it doesn't ensure the process termination
 
     def read_output(self, process, append):
-        s = "\n"
         rest = ""
         while True:
             b = process.stderr.read(4)
@@ -98,14 +97,15 @@ class WgetInstance():
             chunks = re.split(r"[\n\r]", rest + b)
             rest = chunks.pop()
             for chunk in chunks:
-                if not self.analyze_line(chunk):
-                    append(chunk)
+                if chunk == "":
+                    continue
+                self.analyze_line(chunk, append)
 
     num = ['0', '1', '2', '3', '4', '5', '6', '7', '8', '9', ' ']
 
     wget_pattern = re.compile(r"^\s*(\d+)\%\s*\[[+>= ]+\]\s+([,\d]+)\s+([0-9.-]+[KM]/s)")
 
-    def analyze_line(self, line):
+    def analyze_line(self, line, append):
         """
         Returns True if handled. If False, the string is unknown and should be
         appended to output log.
@@ -120,7 +120,11 @@ class WgetInstance():
                 self.downloaded = match.group(2)
                 self.speed = match.group(3)
                 return True
-        return False
+        if line.find("annot") != -1:
+            append(ansi.fail(line))
+            self.error = True
+            return False
+        append(line)
 
     def get_status(self):
         """
@@ -152,6 +156,10 @@ class WgetInstance():
         return self.get_ret_code() is not None
 
 
+class WgetError(Exception):
+    pass
+
+
 class GetOutOfLoop(Exception):
     pass
 
@@ -166,11 +174,11 @@ def get_real_url(url):
             real_url = obj.geturl()
             return real_url
         except IOError, e:
-            print e, "Retrying..."
+            ansi.print_line(str(e) + ". Retrying...")
             continue
 
 def resolver(urls, real_filenames):
-    print "Resolver started."
+    ansi.print_line(ansi.black2("Resolver started."))
     for url in urls:
         real_url = get_real_url("http://www.ex.ua" + url)
         real_filenames[url] = real_url
@@ -191,8 +199,6 @@ def wget(url):
     urls = unique(urls)
     print "Found " + str(len(urls)) + " files."
 
-    ansi = AnsiFormatter()
-
     # Save in file
     f = open(".exuadl", "w")
     f.write(url)
@@ -209,46 +215,60 @@ def wget(url):
     t2.daemon = True
     t2.start()
 
-    iterator = urls.__iter__()
-    current_url = iterator.next()
-    while 1:
-        if len(processes) < threads and current_url and current_url in real_filenames:
-            filename = urllib.unquote(real_filenames[current_url].split('/')[-1])
-            print "Downloading %s as '%s'..." % (current_url, filename)
-            popen = WgetInstance(real_filenames[current_url])
-            processes.append(popen)
-            try:
-                current_url = iterator.next()
-            except:
-                current_url = None
+    try:
+        iterator = urls.__iter__()
+        current_url = iterator.next()
+        while 1:
+            if len(processes) < threads and current_url and current_url in real_filenames:
+                filename = urllib.unquote(real_filenames[current_url].split('/')[-1])
+                print "Downloading %s as '%s'..." % (current_url, filename)
+                popen = WgetInstance(real_filenames[current_url])
+                processes.append(popen)
+                try:
+                    current_url = iterator.next()
+                except:
+                    current_url = None
 
-        line = ""
+            line = ""
+            for process in processes[:]:
+                if process.error:
+                    raise WgetError()
+                if process.is_terminated():
+    #                        print "wget instance is finished."
+                    processes.remove(process)
+                out = process.get_output(clear=True)
+                if out.strip() != "":
+                    ansi.print_line(ansi.black2(out))
+                line += ansi.invert(process.get_status_as_string()) + "    "
+
+            # Show progress
+            ansi.print_progress(line)
+
+            if not current_url and len(processes) == 0:
+                break
+
+            time.sleep(0.3)
+        ansi.print_line("Finished.")
+    except WgetError:
+        # Show the rest
         for process in processes[:]:
             if process.is_terminated():
-#                        print "wget instance is finished."
                 processes.remove(process)
             out = process.get_output(clear=True)
             if out.strip() != "":
                 ansi.print_line(ansi.black2(out))
-            line += str(process.get_status_as_string()) + "    "
-
-        # Show progress
-        ansi.print_progress(line)
-
-        if not current_url and len(processes) == 0:
-            break
-
-        time.sleep(0.3)
-
-    ansi.print_line("Finished.")
+        ansi.print_line("Terminating due to wget error.")
 
 
-if len(sys.argv) == 1:
-    try:
-        f = open(".exuadl", "r")
-        url = f.readline()
-        wget(url)
-    except IOError:
-        print "Can't find saved session. Please specify url to start new download."
-else:
-    wget(sys.argv[1])
+if __name__ == '__main__':
+    ansi = AnsiFormatter()
+
+    if len(sys.argv) == 1:
+        try:
+            f = open(".exuadl", "r")
+            url = f.readline()
+            wget(url)
+        except IOError:
+            print "Can't find saved session. Please specify url to start new download."
+    else:
+        wget(sys.argv[1])
