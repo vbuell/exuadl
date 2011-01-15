@@ -4,6 +4,7 @@ import subprocess
 import time
 import collections
 import threading
+from optparse import OptionParser
 
 __author__ = 'vbuell'
 
@@ -85,6 +86,10 @@ class WgetInstance():
         finally:
             pass
 #            process.terminate() #NOTE: it doesn't ensure the process termination
+
+    def __del__(self):
+        if not self.is_terminated():
+            self.popen.terminate()
 
     def read_output(self, process, append):
         rest = ""
@@ -183,10 +188,28 @@ def resolver(urls, real_filenames):
         real_url = get_real_url("http://www.ex.ua" + url)
         real_filenames[url] = real_url
 
-def wget(url):
+def wget(arg):
+    parser = OptionParser()
+    parser.add_option("-s", "--skip", dest="skip",
+                      help="skip first N files", default=0)
+    parser.add_option("-t", "--threads", dest="threads",
+                      help="use N threads", default=2)
+    parser.add_option("-q", "--quiet",
+                      action="store_false", dest="verbose", default=True,
+                      help="don't print status messages to stdout")
+
+    (options, args) = parser.parse_args(args=arg)
+
+    url = args[1]
+
     print "Exuadl v0.31. Parallel recursive downloader."
     print "Homepage: http://code.google.com/p/exuadl/"
     print
+
+    # Save in file
+    f = open(".exuadl", "w")
+    f.write(" ".join(arg[1:]))
+    f.close()
 
     sys.stdout.write("Fetching list of files to download... ")
     obj = urllib.urlopen(url)
@@ -199,12 +222,9 @@ def wget(url):
     urls = unique(urls)
     print "Found " + str(len(urls)) + " files."
 
-    # Save in file
-    f = open(".exuadl", "w")
-    f.write(url)
-    f.close()
+    urls = urls[int(options.skip):]
 
-    threads = 2
+    threads = int(options.threads)
     processes = []
     real_filenames = {}
 
@@ -267,8 +287,10 @@ if __name__ == '__main__':
         try:
             f = open(".exuadl", "r")
             url = f.readline()
-            wget(url)
+            argss = url.split(" ")
+            argss.insert(0, sys.argv[0])
+            wget(argss)
         except IOError:
             print "Can't find saved session. Please specify url to start new download."
     else:
-        wget(sys.argv[1])
+        wget(sys.argv)
