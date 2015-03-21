@@ -7,12 +7,12 @@ import threading
 from optparse import OptionParser
 
 __author__ = 'vbuell'
-
 # TODO:
 # - Add downloading resume for directory of links
 # - Add support for single files
 # - Store list of already downloaded files in working directory
 # - Ask user if resume file is already exists and new are gonna be created
+
 
 class AnsiFormatter(object):
     def __init__(self):
@@ -75,7 +75,8 @@ class WgetInstance():
         self.downloaded = 0
         self.speed = 0
         self.error = None
-        self.popen = subprocess.Popen("wget -c --progress=bar:force \"%s\"" % url, shell=True, stderr=subprocess.PIPE)
+        # If wget supports '--content-disposition' we can get rid of resolving
+        self.popen = subprocess.Popen("wget -c --restrict-file-names=nocontrol --progress=bar:force \"%s\"" % url, shell=True, stderr=subprocess.PIPE)
         #, stdout=subprocess.PIPE)
         try:
             self.q = collections.deque(maxlen=128) # atomic .append()
@@ -94,7 +95,7 @@ class WgetInstance():
     def read_output(self, process, append):
         rest = ""
         while True:
-            b = process.stderr.read(4)
+            b = process.stderr.read(1024)
             if not b:
                 break
             ofs = 0
@@ -102,40 +103,29 @@ class WgetInstance():
             chunks = re.split(r"[\n\r]", rest + b)
             rest = chunks.pop()
             for chunk in chunks:
-                if chunk == "":
-                    continue
                 self.analyze_line(chunk, append)
 
-    num = ['0', '1', '2', '3', '4', '5', '6', '7', '8', '9', ' ']
-
-    wget_pattern = re.compile(r"^\s*(\d+)\%\s*\[[+>= ]+\]\s+([,\d]+)\s+([0-9.-]+[KM]/s)")
+    wget_pattern = re.compile(r"^\s*(\d+)\%\s*\[[+>= ]+\]\s+([,\d]+)\s+([0-9.-]+[KM]?B?/s)")
 
     def analyze_line(self, line, append):
-        """
-        Returns True if handled. If False, the string is unknown and should be
-        appended to output log.
-        """
         if len(line) == 0:
-            return False
-        first_char = line[0]
-        if first_char in self.num:
-            match = self.wget_pattern.search(line)
-            if match:
-                self.percentage = match.group(1)
-                self.downloaded = match.group(2)
-                self.speed = match.group(3)
-                return True
-        if line.find("annot") != -1:
+            return
+        match = self.wget_pattern.search(line)
+        if match:
+            self.percentage = match.group(1)
+            self.downloaded = match.group(2)
+            self.speed = match.group(3)
+        elif line.find("annot") != -1:
             append(ansi.fail(line))
             self.error = True
-            return False
-        append(line)
+        else:
+            append(line)
 
     def get_status(self):
         """
         Returns status and percentage of download.
         """
-        return (str(self.percentage) + "%", self.downloaded, self.speed)
+        return str(self.percentage) + "%", self.downloaded, self.speed
 
     def get_status_as_string(self):
         """
@@ -168,9 +158,11 @@ class WgetError(Exception):
 class GetOutOfLoop(Exception):
     pass
 
+
 def unique(seq, idfun=repr):
     seen = {}
-    return [seen.setdefault(idfun(e),e) for e in seq if idfun(e) not in seen]
+    return [seen.setdefault(idfun(e), e) for e in seq if idfun(e) not in seen]
+
 
 def get_real_url(url):
     while True:
@@ -182,11 +174,13 @@ def get_real_url(url):
             ansi.print_line(str(e) + ". Retrying...")
             continue
 
+
 def resolver(urls, real_filenames):
     ansi.print_line(ansi.black2("Resolver started."))
     for url in urls:
         real_url = get_real_url("http://www.ex.ua" + url)
         real_filenames[url] = real_url
+
 
 def wget(arg):
     parser = OptionParser()
@@ -216,7 +210,6 @@ def wget(arg):
     data = obj.read()
     obj.close()
     urls = re.findall(r'href=(?:"|\')(/get/[^"\']*)(?:"|\')', data)
-    obj.close()
 
     # Remove duplicates
     urls = unique(urls)
@@ -254,7 +247,6 @@ def wget(arg):
                 if process.error:
                     raise WgetError()
                 if process.is_terminated():
-    #                        print "wget instance is finished."
                     processes.remove(process)
                 out = process.get_output(clear=True)
                 if out.strip() != "":
@@ -289,8 +281,9 @@ if __name__ == '__main__':
             url = f.readline()
             argss = url.split(" ")
             argss.insert(0, sys.argv[0])
-            wget(argss)
         except IOError:
             print "Can't find saved session. Please specify url to start new download."
+        else:
+            wget(argss)
     else:
         wget(sys.argv)
