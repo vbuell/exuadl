@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-import re, sys, urllib
+import re, sys, urllib, os
 import subprocess
 import time
 import collections
@@ -175,12 +175,41 @@ def resolver(urls, real_filenames):
         real_filenames[url] = real_url
 
 
+def parse_folder_name(data):
+    # Name of the folder
+    names = re.findall(r'<meta name="title" content="(.+)">', data)
+    if len(names) != 1:
+        print "Can't find folder name"
+    name = re.sub(r'[/:]', '_', urllib.unquote(names[0]))
+    print "Name:", name
+    return name
+
+
+def parse_parent_folder_name(data):
+    # Name of parent folder (the most top string in the page)
+    groups = re.findall(r'<h2>([^<]+)</h2>', data)
+    if len(groups) != 1:
+        print "Can't find folder name"
+    group = re.sub(r'[/:]', '_', urllib.unquote(groups[0]))
+    print "Group:", group
+    return group
+
+
+def parse_file_urls(html_data):
+    urls = re.findall(r'href=(?:"|\')(/get/[^"\']*)(?:"|\')', html_data)
+    # Remove duplicates
+    urls = unique(urls)
+    return urls
+
+
 def wget(arg):
     parser = OptionParser()
-    parser.add_option("-s", "--skip", dest="skip",
+    parser.add_option("-s", "--skip", dest="skip", type="int",
                       help="skip first N files", default=0)
-    parser.add_option("-t", "--threads", dest="threads",
+    parser.add_option("-t", "--threads", dest="threads", type="int",
                       help="use N threads", default=2)
+    parser.add_option("-p", "--level", dest="level", type="int",
+                      help="directory level. 0 - download to current. 1 - create directory. 2 - create <parent_dir>/<dir>, etc", default=0)
     parser.add_option("-q", "--quiet",
                       action="store_false", dest="verbose", default=True,
                       help="don't print status messages to stdout")
@@ -193,24 +222,30 @@ def wget(arg):
     print "Homepage: http://code.google.com/p/exuadl/"
     print
 
-    # Save in file
-    f = open(".exuadl", "w")
-    f.write(" ".join(arg[1:]))
-    f.close()
-
     sys.stdout.write("Fetching list of files to download... ")
-    obj = urllib.urlopen(url)
-    data = obj.read()
-    obj.close()
-    urls = re.findall(r'href=(?:"|\')(/get/[^"\']*)(?:"|\')', data)
+    file_url = urllib.urlopen(url)
+    html_data = file_url.read()
+    file_url.close()
 
-    # Remove duplicates
-    urls = unique(urls)
+    urls = parse_file_urls(html_data)
     print "Found " + str(len(urls)) + " files."
 
-    urls = urls[int(options.skip):]
+    if options.level >= 1:
+        cwd = parse_folder_name(html_data)
+        if options.level >= 2:
+            cwd = parse_parent_folder_name(html_data) + '/' + cwd
+        if not os.path.exists(cwd):
+            os.makedirs(cwd)
+        os.chdir(cwd)
 
-    threads = int(options.threads)
+    # Save in file
+    with open(".exuadl", "w") as file_state:
+        # Oh. Removing flags by regex is dirty, but let's have this till we have state file rewritten
+        file_state.write(re.sub(r'-p [0-9]+', '', " ".join(arg[1:])))
+
+    urls = urls[options.skip:]
+
+    threads = options.threads
     processes = []
     real_filenames = {}
 
@@ -270,10 +305,10 @@ if __name__ == '__main__':
 
     if len(sys.argv) == 1:
         try:
-            f = open(".exuadl", "r")
-            url = f.readline()
-            argss = url.split(" ")
-            argss.insert(0, sys.argv[0])
+            with open(".exuadl", "r") as f:
+                url = f.readline()
+                argss = url.split(" ")
+                argss.insert(0, sys.argv[0])
         except IOError:
             print "Can't find saved session. Please specify url to start new download."
         else:

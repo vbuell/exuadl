@@ -4,10 +4,9 @@
 # - Store list of already downloaded files in working directory
 # - Ask user if resume file is already exists and new are gonna be created
 # - Support for subfolders (-r arg)
-# - Create directory (-p0, like in patch)
 # - python3 ready
-# - run via env
 # - WgetInstance shouldn't return get_status_as_string. Formatting is not its responsibility
+# - -t0 is invalid. handle it correctly
 
 Experimental:
 # - Dump resolved url (probably with resolved IP) and downloading using this dump information
