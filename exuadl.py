@@ -6,13 +6,6 @@ import collections
 import threading
 from optparse import OptionParser
 
-__author__ = 'vbuell'
-# TODO:
-# - Add downloading resume for directory of links
-# - Add support for single files
-# - Store list of already downloaded files in working directory
-# - Ask user if resume file is already exists and new are gonna be created
-
 
 class AnsiFormatter(object):
     def __init__(self):
@@ -105,7 +98,7 @@ class WgetInstance():
             for chunk in chunks:
                 self.analyze_line(chunk, append)
 
-    wget_pattern = re.compile(r"^\s*(\d+)\%\s*\[[+>= ]+\]\s+([,\d]+)\s+([0-9.-]+[KM]?B?/s)")
+    wget_pattern = re.compile(r"^\s*(\d+)%\s*\[[+>= ]+\]\s+([,\d]+)\s+([0-9.-]+[KM]?B?/s)")
 
     def analyze_line(self, line, append):
         if len(line) == 0:
@@ -235,14 +228,14 @@ def wget(arg):
             if len(processes) < threads and current_url and current_url in real_filenames:
                 filename = urllib.unquote(real_filenames[current_url].split('/')[-1])
                 print "Downloading %s as '%s'..." % (current_url, filename)
-                popen = WgetInstance(real_filenames[current_url])
-                processes.append(popen)
+                wget_downloader = WgetInstance(real_filenames[current_url])
+                processes.append(wget_downloader)
                 try:
                     current_url = iterator.next()
                 except:
                     current_url = None
 
-            line = ""
+            processes_status_line = []
             for process in processes[:]:
                 if process.error:
                     raise WgetError()
@@ -251,10 +244,10 @@ def wget(arg):
                 out = process.get_output(clear=True)
                 if out.strip() != "":
                     ansi.print_line(ansi.black2(out))
-                line += ansi.invert(process.get_status_as_string()) + "    "
+                processes_status_line.append(ansi.invert(process.get_status_as_string()))
 
             # Show progress
-            ansi.print_progress(line)
+            ansi.print_progress("    ".join(processes_status_line))
 
             if not current_url and len(processes) == 0:
                 break
