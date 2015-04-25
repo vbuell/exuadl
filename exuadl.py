@@ -4,6 +4,7 @@ import subprocess
 import time
 import collections
 import threading
+import json
 from optparse import OptionParser
 
 
@@ -30,9 +31,6 @@ class AnsiFormatter(object):
 
     def skip(self, txt):
         return "\033[34m\033[1m"+txt+"\033[0m"
-
-    def home(self):
-        return "\033[2J\033[H"
 
     def black3(self, txt):
         return txt
@@ -202,28 +200,63 @@ def parse_file_urls(html_data):
     return urls
 
 
-def wget(arg):
+def parse_options(arg):
     parser = OptionParser()
     parser.add_option("-s", "--skip", dest="skip", type="int",
                       help="skip first N files", default=0)
     parser.add_option("-t", "--threads", dest="threads", type="int",
                       help="use N threads", default=2)
     parser.add_option("-p", "--level", dest="level", type="int",
-                      help="directory level. 0 - download to current. 1 - create directory. 2 - create <parent_dir>/<dir>, etc", default=0)
+                      help="directory level. 0 - download to current. 1 - create directory. 2 - create <parent_dir>/<dir>, etc",
+                      default=0)
     parser.add_option("-q", "--quiet",
                       action="store_false", dest="verbose", default=True,
                       help="don't print status messages to stdout")
-
     (options, args) = parser.parse_args(args=arg)
+    options.url = args[1]
 
-    url = args[1]
+    return options
 
-    print "Exuadl v0.31. Parallel recursive downloader."
+
+def save_state_to_file(options):
+    with open('.exuadl', 'w') as file_state:
+        json.dump(options.__dict__, file_state, sort_keys=True, indent=4, separators=(',', ': '))
+
+
+def load_state_from_file():
+    try:
+        with open(".exuadl", "r") as f:
+            # Try new format
+            try:
+                # Hack: python-dict-object
+                class objectview(object):
+                    def __init__(self, d):
+                        self.__dict__ = d
+
+                options = objectview(json.load(f))
+            except ValueError:
+                print(ansi.skip("Config file doesn't seem to be a valid json. Trying to parse it in old way... If succesfull, it will be converted to new json-based format"))
+                # Handle old-style config. Do not forget to seek to 0 after json library...
+                f.seek(0)
+                url = f.readline()
+                argss = url.split(" ")
+                argss.insert(0, sys.argv[0])
+                options = parse_options(argss)
+            # This is kinda dirty. We shouldn't take level into account when loading the state from file, as we are already
+            # in the right directory
+            options.level = 0
+            return options
+    except IOError:
+        raise WgetError("Can't find saved session. Please specify url to start new download.")
+
+
+def wget(options):
+    print "Exuadl v0.32. Parallel recursive downloader."
     print "Homepage: http://code.google.com/p/exuadl/"
     print
 
     sys.stdout.write("Fetching list of files to download... ")
-    file_url = urllib.urlopen(url)
+    file_url = urllib.urlopen(options.url)
     html_data = file_url.read()
     file_url.close()
 
@@ -239,13 +272,10 @@ def wget(arg):
         os.chdir(cwd)
 
     # Save in file
-    with open(".exuadl", "w") as file_state:
-        # Oh. Removing flags by regex is dirty, but let's have this till we have state file rewritten
-        file_state.write(re.sub(r'-p [0-9]+', '', " ".join(arg[1:])))
+    save_state_to_file(options)
 
     urls = urls[options.skip:]
 
-    threads = options.threads
     processes = []
     real_filenames = {}
 
@@ -260,7 +290,7 @@ def wget(arg):
         iterator = urls.__iter__()
         current_url = iterator.next()
         while 1:
-            if len(processes) < threads and current_url and current_url in real_filenames:
+            if len(processes) < options.threads and current_url and current_url in real_filenames:
                 filename = urllib.unquote(real_filenames[current_url].split('/')[-1])
                 print "Downloading %s as '%s'..." % (current_url, filename)
                 wget_downloader = WgetInstance(real_filenames[current_url])
@@ -273,7 +303,7 @@ def wget(arg):
             processes_status_line = []
             for process in processes[:]:
                 if process.error:
-                    raise WgetError()
+                    raise GetOutOfLoop()
                 if process.is_terminated():
                     processes.remove(process)
                 out = process.get_output(clear=True)
@@ -289,7 +319,7 @@ def wget(arg):
 
             time.sleep(0.3)
         ansi.print_line("Finished.")
-    except WgetError:
+    except GetOutOfLoop:
         # Show the rest
         for process in processes[:]:
             if process.is_terminated():
@@ -303,15 +333,10 @@ def wget(arg):
 if __name__ == '__main__':
     ansi = AnsiFormatter()
 
-    if len(sys.argv) == 1:
-        try:
-            with open(".exuadl", "r") as f:
-                url = f.readline()
-                argss = url.split(" ")
-                argss.insert(0, sys.argv[0])
-        except IOError:
-            print "Can't find saved session. Please specify url to start new download."
+    try:
+        if len(sys.argv) == 1:
+            wget(load_state_from_file())
         else:
-            wget(argss)
-    else:
-        wget(sys.argv)
+            wget(parse_options(sys.argv))
+    except WgetError as e:
+        print ansi.error(e.message)
