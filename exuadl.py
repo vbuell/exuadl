@@ -13,7 +13,7 @@ class AnsiFormatter(object):
         self.last_line_is_progress = False
         self.last_line_len = 0
 
-    def fail(self, txt):
+    def red(self, txt):
         return "\033[31m"+txt+"\033[0m"
 
     def error(self, txt):
@@ -67,7 +67,8 @@ class WgetInstance():
         self.speed = 0
         self.error = None
         # If wget supports '--content-disposition' we can get rid of resolving
-        self.popen = subprocess.Popen("wget -c --restrict-file-names=nocontrol --progress=bar:force \"%s\"" % url, shell=True, stderr=subprocess.PIPE)
+        self.popen = subprocess.Popen("wget -c --restrict-file-names=nocontrol --progress=bar:force \"%s\"" % url,
+                                      shell=True, stderr=subprocess.PIPE)
         #, stdout=subprocess.PIPE)
         try:
             self.q = collections.deque(maxlen=128) # atomic .append()
@@ -89,8 +90,6 @@ class WgetInstance():
             b = process.stderr.read(1024)
             if not b:
                 break
-            ofs = 0
-#            while True:
             chunks = re.split(r"[\n\r]", rest + b)
             rest = chunks.pop()
             for chunk in chunks:
@@ -107,7 +106,7 @@ class WgetInstance():
             self.downloaded = match.group(2)
             self.speed = match.group(3)
         elif line.find("annot") != -1:
-            append(ansi.fail(line))
+            append(ansi.red(line))
             self.error = True
         else:
             append(line)
@@ -177,9 +176,8 @@ def parse_folder_name(data):
     # Name of the folder
     names = re.findall(r'<meta name="title" content="(.+)">', data)
     if len(names) != 1:
-        print "Can't find folder name"
+        raise RuntimeError("Can't parse folder name")
     name = re.sub(r'[/:]', '_', urllib.unquote(names[0]))
-    print "Name:", name
     return name
 
 
@@ -187,9 +185,8 @@ def parse_parent_folder_name(data):
     # Name of parent folder (the most top string in the page)
     groups = re.findall(r'<h2>([^<]+)</h2>', data)
     if len(groups) != 1:
-        print "Can't find folder name"
+        raise RuntimeError("Can't parse parent folder name")
     group = re.sub(r'[/:]', '_', urllib.unquote(groups[0]))
-    print "Group:", group
     return group
 
 
@@ -209,6 +206,9 @@ def parse_options(arg):
     parser.add_option("-p", "--level", dest="level", type="int",
                       help="directory level. 0 - download to current. 1 - create directory. 2 - create <parent_dir>/<dir>, etc",
                       default=0)
+    parser.add_option("-f", "--fast",
+                      action="store_true", dest="faststart", default=False,
+                      help="use cached urls (only for resuming)")
     parser.add_option("-q", "--quiet",
                       action="store_false", dest="verbose", default=True,
                       help="don't print status messages to stdout")
@@ -225,7 +225,7 @@ def save_state_to_file(options):
 
 def load_state_from_file():
     try:
-        with open(".exuadl", "r") as f:
+        with open('.exuadl', 'r') as f:
             # Try new format
             try:
                 # Hack: python-dict-object
@@ -242,9 +242,13 @@ def load_state_from_file():
                 argss = url.split(" ")
                 argss.insert(0, sys.argv[0])
                 options = parse_options(argss)
-            # This is kinda dirty. We shouldn't take level into account when loading the state from file, as we are already
-            # in the right directory
+            # This is kinda dirty. We shouldn't take level into account when loading the state from file, as we are
+            # already in the right directory
             options.level = 0
+
+            # Add new options
+            if not hasattr(options, 'faststart'): options.faststart = False
+            if not hasattr(options, 'urls_original'): options.urls_original = []
             return options
     except IOError:
         raise WgetError("Can't find saved session. Please specify url to start new download.")
@@ -255,26 +259,31 @@ def wget(options):
     print "Homepage: http://code.google.com/p/exuadl/"
     print
 
-    sys.stdout.write("Fetching list of files to download... ")
-    file_url = urllib.urlopen(options.url)
-    html_data = file_url.read()
-    file_url.close()
+    if not options.faststart or not options.urls_original:
+        sys.stdout.write("Fetching list of files to download... ")
+        file_url = urllib.urlopen(options.url)
+        html_data = file_url.read()
+        file_url.close()
 
-    urls = parse_file_urls(html_data)
-    print "Found " + str(len(urls)) + " files."
+        urls = parse_file_urls(html_data)
+        print "Found " + str(len(urls)) + " files."
 
-    if options.level >= 1:
-        cwd = parse_folder_name(html_data)
-        if options.level >= 2:
-            cwd = parse_parent_folder_name(html_data) + '/' + cwd
-        if not os.path.exists(cwd):
-            os.makedirs(cwd)
-        os.chdir(cwd)
+        if options.level >= 1:
+            cwd = parse_folder_name(html_data)
+            if options.level >= 2:
+                cwd = parse_parent_folder_name(html_data) + '/' + cwd
+            if not os.path.exists(cwd):
+                os.makedirs(cwd)
+            os.chdir(cwd)
 
-    # Save in file
-    save_state_to_file(options)
+        urls = urls[options.skip:]
 
-    urls = urls[options.skip:]
+        options.urls_original = urls
+
+        # Save in file
+        save_state_to_file(options)
+    else:
+        urls = options.urls_original
 
     processes = []
     real_filenames = {}
@@ -292,7 +301,7 @@ def wget(options):
         while 1:
             if len(processes) < options.threads and current_url and current_url in real_filenames:
                 filename = urllib.unquote(real_filenames[current_url].split('/')[-1])
-                print "Downloading %s as '%s'..." % (current_url, filename)
+                ansi.print_line("Downloading %s as '%s'..." % (current_url, filename))
                 wget_downloader = WgetInstance(real_filenames[current_url])
                 processes.append(wget_downloader)
                 try:
