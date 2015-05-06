@@ -1,10 +1,14 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 import re, sys, urllib, os
 import subprocess
 import time
 import collections
 import threading
 import json
+import itertools
+import urllib.parse
+from urllib.request import urlopen
+import socket
 from optparse import OptionParser
 
 
@@ -56,7 +60,7 @@ class AnsiFormatter(object):
     def print_line(self, line):
         if self.last_line_is_progress:
             sys.stdout.write(" " * self.last_line_len + "\r")
-        print line
+        print(line)
         self.last_line_is_progress = False
 
 
@@ -90,7 +94,7 @@ class WgetInstance():
             b = process.stderr.read(1024)
             if not b:
                 break
-            chunks = re.split(r"[\n\r]", rest + b)
+            chunks = re.split(r'[\n\r]', rest + b.decode())
             rest = chunks.pop()
             for chunk in chunks:
                 self.analyze_line(chunk, append)
@@ -157,19 +161,14 @@ def unique(seq, idfun=repr):
 def get_real_url(url):
     while True:
         try:
-            obj = urllib.urlopen(url)
+            obj = urlopen(url)
             real_url = obj.geturl()
+            # urlparsed = urllib.parse(real_url)
+            # addr = urlparse.urlunparse((urlparsed[0],) + (socket.gethostbyname(urlparsed.hostname),) + urlparsed[2:])
             return real_url
-        except IOError, e:
+        except IOError as e:
             ansi.print_line(str(e) + ". Retrying...")
             continue
-
-
-def resolver(urls, real_filenames):
-    ansi.print_line(ansi.black2("Resolver started."))
-    for url in urls:
-        real_url = get_real_url("http://www.ex.ua" + url)
-        real_filenames[url] = real_url
 
 
 def parse_folder_name(data):
@@ -197,6 +196,33 @@ def parse_file_urls(html_data):
     return urls
 
 
+def parse_links_urls(html_data):
+    urls = re.findall(r'<p><a href=(?:"|\')(/[0-9]+)\?r=[0-9]+(?:"|\')><b>', html_data)
+    # Remove duplicates
+    urls = unique(urls)
+    return urls
+
+
+def parse_all_links_urls_paged(url):
+    all_links = []
+    parsed_url = urlparse.urlsplit(url)
+    filtered_query = '&'.join(i for i in parsed_url.query.split('&') if not i.startswith('p='))
+
+    for idx in itertools.count():
+        ansi.print_progress('Scrapping page #%s...' % idx)
+        file_url = urllib.urlopen(urlparse.urlunsplit(parsed_url[:3] + (filtered_query + 'p=%s' % idx,) + parsed_url[4:]))
+        html_data = file_url.read()
+        links = parse_links_urls(html_data)
+        file_url.close()
+
+        all_links.extend(links)
+
+        if not links:
+            break
+
+    return all_links
+
+
 def parse_options(arg):
     parser = OptionParser()
     parser.add_option("-s", "--skip", dest="skip", type="int",
@@ -209,6 +235,9 @@ def parse_options(arg):
     parser.add_option("-f", "--fast",
                       action="store_true", dest="faststart", default=False,
                       help="use cached urls (only for resuming)")
+    parser.add_option("-c", "--do-not-download",
+                      action="store_true", dest="crawl", default=False,
+                      help="crawl and create file structure but not download")
     parser.add_option("-q", "--quiet",
                       action="store_false", dest="verbose", default=True,
                       help="don't print status messages to stdout")
@@ -220,7 +249,9 @@ def parse_options(arg):
 
 def save_state_to_file(options):
     with open('.exuadl', 'w') as file_state:
-        json.dump(options.__dict__, file_state, sort_keys=True, indent=4, separators=(',', ': '))
+        data = options.__dict__.copy()
+        del data['crawl']
+        json.dump(data, file_state, sort_keys=True, indent=4, separators=(',', ': '))
 
 
 def load_state_from_file():
@@ -248,25 +279,28 @@ def load_state_from_file():
 
             # Add new options
             if not hasattr(options, 'faststart'): options.faststart = False
+            if not hasattr(options, 'crawl'): options.crawl = False
             if not hasattr(options, 'urls_original'): options.urls_original = []
             return options
     except IOError:
         raise WgetError("Can't find saved session. Please specify url to start new download.")
 
 
-def wget(options):
-    print "Exuadl v0.32. Parallel recursive downloader."
-    print "Homepage: http://code.google.com/p/exuadl/"
-    print
-
+def wget(options, exit_if_directory_exists=False):
+    dirs = []
+    cwd_original = os.getcwd()
     if not options.faststart or not options.urls_original:
-        sys.stdout.write("Fetching list of files to download... ")
+        ansi.print_line("Fetching list of files to download... ")
         file_url = urllib.urlopen(options.url)
         html_data = file_url.read()
         file_url.close()
 
         urls = parse_file_urls(html_data)
-        print "Found " + str(len(urls)) + " files."
+        ansi.print_line("Found " + str(len(urls)) + " files. ")
+
+        if not urls:
+            dirs = parse_all_links_urls_paged(options.url)
+            ansi.print_line('Found %s dirs.' % len(dirs))
 
         if options.level >= 1:
             cwd = parse_folder_name(html_data)
@@ -274,39 +308,52 @@ def wget(options):
                 cwd = parse_parent_folder_name(html_data) + '/' + cwd
             if not os.path.exists(cwd):
                 os.makedirs(cwd)
+            elif exit_if_directory_exists:
+                return
             os.chdir(cwd)
 
-        urls = urls[options.skip:]
+        urls = resolve_urls(urls[options.skip:])
 
         options.urls_original = urls
 
         # Save in file
         save_state_to_file(options)
     else:
-        urls = options.urls_original
+        urls = resolve_urls(options.urls_original)
 
+    if not options.crawl:
+        download_urls(urls, options)
+
+    for dir_link in dirs:
+        options.level = 1
+        options.url = "http://www.ex.ua" + dir_link
+        options.faststart = True
+        options.urls_original = None
+        wget(options, exit_if_directory_exists=True)
+
+    os.chdir(cwd_original)
+
+
+def resolve_urls(urls):
+    return map(lambda a: get_real_url("http://www.ex.ua" + a), urls)
+
+
+def download_urls(urls, options):
     processes = []
-    real_filenames = {}
-
-    t1 = threading.Thread(target=resolver, args=(urls[::2], real_filenames))
-    t1.daemon = True
-    t1.start()
-    t2 = threading.Thread(target=resolver, args=(urls[1::2], real_filenames))
-    t2.daemon = True
-    t2.start()
 
     try:
         iterator = urls.__iter__()
-        current_url = iterator.next()
+        current_url = next(iterator)
         while 1:
-            if len(processes) < options.threads and current_url and current_url in real_filenames:
-                filename = urllib.unquote(real_filenames[current_url].split('/')[-1])
+            if len(processes) < options.threads and current_url:
+                resolved_url = current_url  # get_real_url(current_url)
+                filename = urllib.parse.unquote(resolved_url.split('/')[-1])
                 ansi.print_line("Downloading %s as '%s'..." % (current_url, filename))
-                wget_downloader = WgetInstance(real_filenames[current_url])
+                wget_downloader = WgetInstance(resolved_url)
                 processes.append(wget_downloader)
                 try:
-                    current_url = iterator.next()
-                except:
+                    current_url = next(iterator)
+                except StopIteration:
                     current_url = None
 
             processes_status_line = []
@@ -340,6 +387,10 @@ def wget(options):
 
 
 if __name__ == '__main__':
+    print("Exuadl v0.40. Parallel recursive downloader.")
+    print("Homepage: https://github.com/vbuell/exuadl")
+    print()
+
     ansi = AnsiFormatter()
 
     try:
@@ -348,4 +399,4 @@ if __name__ == '__main__':
         else:
             wget(parse_options(sys.argv))
     except WgetError as e:
-        print ansi.error(e.message)
+        print(ansi.error(e.message))
