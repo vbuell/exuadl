@@ -176,7 +176,7 @@ def parse_folder_name(data):
     names = re.findall(r'<meta name="title" content="(.+)">', data)
     if len(names) != 1:
         raise RuntimeError("Can't parse folder name")
-    name = re.sub(r'[/:]', '_', urllib.unquote(names[0]))
+    name = re.sub(r'[/:]', '_', urllib.parse.unquote(names[0]))
     return name
 
 
@@ -205,13 +205,13 @@ def parse_links_urls(html_data):
 
 def parse_all_links_urls_paged(url):
     all_links = []
-    parsed_url = urlparse.urlsplit(url)
+    parsed_url = urllib.parse.urlsplit(url)
     filtered_query = '&'.join(i for i in parsed_url.query.split('&') if not i.startswith('p='))
 
     for idx in itertools.count():
         ansi.print_progress('Scrapping page #%s...' % idx)
-        file_url = urllib.urlopen(urlparse.urlunsplit(parsed_url[:3] + (filtered_query + 'p=%s' % idx,) + parsed_url[4:]))
-        html_data = file_url.read()
+        file_url = urlopen(urllib.parse.urlunsplit(parsed_url[:3] + (filtered_query + 'p=%s' % idx,) + parsed_url[4:]))
+        html_data = file_url.read().decode()
         links = parse_links_urls(html_data)
         file_url.close()
 
@@ -251,6 +251,7 @@ def save_state_to_file(options):
     with open('.exuadl', 'w') as file_state:
         data = options.__dict__.copy()
         del data['crawl']
+        print(data)
         json.dump(data, file_state, sort_keys=True, indent=4, separators=(',', ': '))
 
 
@@ -286,14 +287,19 @@ def load_state_from_file():
         raise WgetError("Can't find saved session. Please specify url to start new download.")
 
 
-def wget(options, exit_if_directory_exists=False):
+def read_url_content(options):
+    ansi.print_line("Fetching list of files to download... ")
+    file_url = urlopen(options.url)
+    html_data = file_url.read().decode()
+    file_url.close()
+    return html_data
+
+
+def wget(options, exit_if_directory_exists=False, cwd=os.getcwd()):
     dirs = []
     cwd_original = os.getcwd()
     if not options.faststart or not options.urls_original:
-        ansi.print_line("Fetching list of files to download... ")
-        file_url = urllib.urlopen(options.url)
-        html_data = file_url.read()
-        file_url.close()
+        html_data = read_url_content(options)
 
         urls = parse_file_urls(html_data)
         ansi.print_line("Found " + str(len(urls)) + " files. ")
@@ -303,23 +309,24 @@ def wget(options, exit_if_directory_exists=False):
             ansi.print_line('Found %s dirs.' % len(dirs))
 
         if options.level >= 1:
-            cwd = parse_folder_name(html_data)
+            cwd_ = cwd + '/' + parse_folder_name(html_data)
             if options.level >= 2:
-                cwd = parse_parent_folder_name(html_data) + '/' + cwd
-            if not os.path.exists(cwd):
-                os.makedirs(cwd)
+                cwd_ = cwd + '/' + parse_parent_folder_name(html_data) + '/' + cwd
+            if not os.path.exists(cwd_):
+                os.makedirs(cwd_)
             elif exit_if_directory_exists:
                 return
-            os.chdir(cwd)
+            cwd = cwd_
+        os.chdir(cwd)
 
-        urls = resolve_urls(urls[options.skip:])
+        urls = map_to_full_url(urls[options.skip:])
 
         options.urls_original = urls
 
         # Save in file
         save_state_to_file(options)
     else:
-        urls = resolve_urls(options.urls_original)
+        urls = map_to_full_url(options.urls_original)
 
     if not options.crawl:
         download_urls(urls, options)
@@ -329,13 +336,18 @@ def wget(options, exit_if_directory_exists=False):
         options.url = "http://www.ex.ua" + dir_link
         options.faststart = True
         options.urls_original = None
-        wget(options, exit_if_directory_exists=True)
+        wget(options, exit_if_directory_exists=True, cwd=cwd)
 
     os.chdir(cwd_original)
 
 
+def map_to_full_url(urls):
+    return list(map(lambda a: "http://www.ex.ua" + a, urls))
+
+
 def resolve_urls(urls):
-    return map(lambda a: get_real_url("http://www.ex.ua" + a), urls)
+    print(urls)
+    return list(map(get_real_url, urls))
 
 
 def download_urls(urls, options):
