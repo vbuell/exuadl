@@ -11,3 +11,42 @@
 Experimental:
 # - Dump resolved url (probably with resolved IP) and downloading using this dump information
 # - Configuration file, that supports downloaded urls, information that everything was downloaded, etc
+
+
+
+
+
+Found 118 files. 
+Found 180 files. 
+Traceback (most recent call last):
+  File "/home/fj/bin/exuadl.py", line 422, in <module>
+    wget(parse_options(sys.argv))
+  File "/home/fj/bin/exuadl.py", line 342, in wget
+    list(executor.map(fork_wget, dirs))
+  File "/usr/lib/python3.4/concurrent/futures/_base.py", line 549, in result_iterator
+    yield future.result()
+  File "/usr/lib/python3.4/concurrent/futures/_base.py", line 395, in result
+    return self.__get_result()
+  File "/usr/lib/python3.4/concurrent/futures/_base.py", line 354, in __get_result
+    raise self._exception
+  File "/usr/lib/python3.4/concurrent/futures/thread.py", line 54, in run
+    result = self.fn(*self.args, **self.kwargs)
+  File "/home/fj/bin/exuadl.py", line 339, in fork_wget
+    wget(options, exit_if_directory_exists=True, cwd=cwd)
+  File "/home/fj/bin/exuadl.py", line 302, in wget
+    html_data = read_url_content(options)
+  File "/home/fj/bin/exuadl.py", line 292, in read_url_content
+    file_url = urlopen(options.url)
+  File "/usr/lib/python3.4/urllib/request.py", line 153, in urlopen
+    return opener.open(url, data, timeout)
+  File "/usr/lib/python3.4/urllib/request.py", line 461, in open
+    response = meth(req, response)
+  File "/usr/lib/python3.4/urllib/request.py", line 571, in http_response
+    'http', request, response, code, msg, hdrs)
+  File "/usr/lib/python3.4/urllib/request.py", line 499, in error
+    return self._call_chain(*args)
+  File "/usr/lib/python3.4/urllib/request.py", line 433, in _call_chain
+    result = func(*args)
+  File "/usr/lib/python3.4/urllib/request.py", line 579, in http_error_default
+    raise HTTPError(req.full_url, code, msg, hdrs, fp)
+urllib.error.HTTPError: HTTP Error 503: Service Temporarily Unavailable

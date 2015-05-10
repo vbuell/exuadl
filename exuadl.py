@@ -7,8 +7,10 @@ import threading
 import json
 import itertools
 import urllib.parse
-from urllib.request import urlopen
 import socket
+from urllib.request import urlopen
+import concurrent.futures
+import html
 from optparse import OptionParser
 
 
@@ -64,15 +66,19 @@ class AnsiFormatter(object):
         self.last_line_is_progress = False
 
 
+class Options():
+    pass
+
+
 class WgetInstance():
-    def __init__(self, url):
+    def __init__(self, url, cwd):
         self.percentage = 0
         self.downloaded = 0
         self.speed = 0
         self.error = None
         # If wget supports '--content-disposition' we can get rid of resolving
-        self.popen = subprocess.Popen("wget -c --restrict-file-names=nocontrol --progress=bar:force \"%s\"" % url,
-                                      shell=True, stderr=subprocess.PIPE)
+        self.popen = subprocess.Popen("wget -c --restrict-file-names=nocontrol --content-disposition --progress=bar:force \"%s\"" % url,
+                                      shell=True, stderr=subprocess.PIPE, cwd=cwd)
         #, stdout=subprocess.PIPE)
         try:
             self.q = collections.deque(maxlen=128) # atomic .append()
@@ -173,11 +179,14 @@ def get_real_url(url):
 
 def parse_folder_name(data):
     # Name of the folder
-    names = re.findall(r'<meta name="title" content="(.+)">', data)
+    names = re.findall(b'<meta name="title" content="(.+)">', data)
     if len(names) != 1:
         raise RuntimeError("Can't parse folder name")
-    name = re.sub(r'[/:]', '_', urllib.parse.unquote(names[0]))
-    return name
+    name = re.sub(r'[/:]', '_', urllib.parse.unquote(names[0].decode()))
+    while len(name.encode()) > 255:
+        name = name[:-1]
+    return html.unescape(name)
+
 
 
 def parse_parent_folder_name(data):
@@ -185,22 +194,22 @@ def parse_parent_folder_name(data):
     groups = re.findall(r'<h2>([^<]+)</h2>', data)
     if len(groups) != 1:
         raise RuntimeError("Can't parse parent folder name")
-    group = re.sub(r'[/:]', '_', urllib.unquote(groups[0]))
-    return group
+    group = re.sub(r'[/:]', '_', urllib.unquote(groups[0].decode()))
+    return html.unescape(group)
 
 
 def parse_file_urls(html_data):
-    urls = re.findall(r'href=(?:"|\')(/get/[^"\']*)(?:"|\')', html_data)
+    urls = re.findall(b'href=(?:"|\')(/get/[^"\']*)(?:"|\')', html_data)
     # Remove duplicates
     urls = unique(urls)
-    return urls
+    return list(map(lambda s: s.decode(), urls))
 
 
 def parse_links_urls(html_data):
-    urls = re.findall(r'<p><a href=(?:"|\')(/[0-9]+)\?r=[0-9]+(?:"|\')><b>', html_data)
+    urls = re.findall(b'<p><a href=(?:"|\')(/[0-9]+)\?r=[0-9]+(?:"|\')><b>', html_data)
     # Remove duplicates
     urls = unique(urls)
-    return urls
+    return list(map(lambda s: s.decode(), urls))
 
 
 def parse_all_links_urls_paged(url):
@@ -209,15 +218,15 @@ def parse_all_links_urls_paged(url):
     filtered_query = '&'.join(i for i in parsed_url.query.split('&') if not i.startswith('p='))
 
     for idx in itertools.count():
-        ansi.print_progress('Scrapping page #%s...' % idx)
+        ansi.print_line('Scrapping page #%s...' % idx)
         file_url = urlopen(urllib.parse.urlunsplit(parsed_url[:3] + (filtered_query + 'p=%s' % idx,) + parsed_url[4:]))
-        html_data = file_url.read().decode()
+        html_data = file_url.read()
         links = parse_links_urls(html_data)
         file_url.close()
 
         all_links.extend(links)
 
-        if not links:
+        if not re.findall(b"<img src='/t3/arr_e.gif", html_data):
             break
 
     return all_links
@@ -251,7 +260,6 @@ def save_state_to_file(options):
     with open('.exuadl', 'w') as file_state:
         data = options.__dict__.copy()
         del data['crawl']
-        print(data)
         json.dump(data, file_state, sort_keys=True, indent=4, separators=(',', ': '))
 
 
@@ -288,11 +296,23 @@ def load_state_from_file():
 
 
 def read_url_content(options):
-    ansi.print_line("Fetching list of files to download... ")
-    file_url = urlopen(options.url)
-    html_data = file_url.read().decode()
-    file_url.close()
-    return html_data
+    count = 15
+    while True:
+        try:
+            # ansi.print_line("Fetching list of files to download... ")
+            file_url = urlopen(options.url)
+            # html_data = UnicodeDammit(file_url.read(), smart_quotes_to="ascii").unicode_markup
+            html_data = file_url.read()
+            file_url.close()
+            return html_data
+        except (urllib.error.HTTPError, socket.gaierror, urllib.error.URLError) as e:
+            if count < 1:
+                ansi.print_line(ansi.red("Cannot read " + options.url))
+                raise e
+            ansi.print_line(str(e) + ". Retrying...")
+            time.sleep(16 - count)
+            count -= 1
+            continue
 
 
 def wget(options, exit_if_directory_exists=False, cwd=os.getcwd()):
@@ -302,11 +322,11 @@ def wget(options, exit_if_directory_exists=False, cwd=os.getcwd()):
         html_data = read_url_content(options)
 
         urls = parse_file_urls(html_data)
-        ansi.print_line("Found " + str(len(urls)) + " files. ")
+        # ansi.print_line("Found " + str(len(urls)) + " files. ")
 
         if not urls:
             dirs = parse_all_links_urls_paged(options.url)
-            ansi.print_line('Found %s dirs.' % len(dirs))
+            # ansi.print_line('Found %s dirs.' % len(dirs))
 
         if options.level >= 1:
             cwd_ = cwd + '/' + parse_folder_name(html_data)
@@ -315,28 +335,41 @@ def wget(options, exit_if_directory_exists=False, cwd=os.getcwd()):
             if not os.path.exists(cwd_):
                 os.makedirs(cwd_)
             elif exit_if_directory_exists:
+                print('Directory exists - skipping')
                 return
             cwd = cwd_
+        print('Working in %s dirs:%s files:%s' % (cwd, len(dirs), len(urls)))
         os.chdir(cwd)
 
         urls = map_to_full_url(urls[options.skip:])
 
         options.urls_original = urls
 
+        # Save html
+        fh = open('.html', 'wb')
+        fh.write(html_data)
+        fh.close()
+
         # Save in file
         save_state_to_file(options)
     else:
-        urls = map_to_full_url(options.urls_original)
+        urls = options.urls_original
 
     if not options.crawl:
-        download_urls(urls, options)
+        download_urls(urls, cwd, options)
 
-    for dir_link in dirs:
-        options.level = 1
-        options.url = "http://www.ex.ua" + dir_link
-        options.faststart = True
-        options.urls_original = None
-        wget(options, exit_if_directory_exists=True, cwd=cwd)
+    def fork_wget(dir_link):
+        options_args = Options()
+        options_args.level = 1
+        options_args.skip = 0
+        options_args.threads = 2
+        options_args.crawl = True
+        options_args.url = "http://www.ex.ua" + dir_link
+        options_args.faststart = True
+        options_args.urls_original = None
+        wget(options_args, exit_if_directory_exists=True, cwd=cwd)
+
+    list(executor.map(fork_wget, dirs))
 
     os.chdir(cwd_original)
 
@@ -346,11 +379,10 @@ def map_to_full_url(urls):
 
 
 def resolve_urls(urls):
-    print(urls)
     return list(map(get_real_url, urls))
 
 
-def download_urls(urls, options):
+def download_urls(urls, directory_path, options):
     processes = []
 
     try:
@@ -361,7 +393,7 @@ def download_urls(urls, options):
                 resolved_url = current_url  # get_real_url(current_url)
                 filename = urllib.parse.unquote(resolved_url.split('/')[-1])
                 ansi.print_line("Downloading %s as '%s'..." % (current_url, filename))
-                wget_downloader = WgetInstance(resolved_url)
+                wget_downloader = WgetInstance(resolved_url, directory_path)
                 processes.append(wget_downloader)
                 try:
                     current_url = next(iterator)
@@ -404,6 +436,7 @@ if __name__ == '__main__':
     print()
 
     ansi = AnsiFormatter()
+    executor = concurrent.futures.ThreadPoolExecutor(max_workers=8)
 
     try:
         if len(sys.argv) == 1:
