@@ -4,17 +4,26 @@
 # - Store list of already downloaded files in working directory
 # - Ask user if resume file is already exists and new are gonna be created
 # - Support for subfolders (-r arg)
-# - python3 ready
+# - port to python3
 # - WgetInstance shouldn't return get_status_as_string. Formatting is not its responsibility
-# - -t0 is invalid. handle it correctly
+# - -t0 flag is invalid. handle it correctly
 
 Experimental:
 # - Dump resolved url (probably with resolved IP) and downloading using this dump information
 # - Configuration file, that supports downloaded urls, information that everything was downloaded, etc
 
+XBMC/Kodi integration:
+# - Dump links as .strm files
+# - Create .nfo with meta information (if possible)
+# - Download .m3u and .pls files
+
+Others:
+# - Cache for downloaded html (what to do with paged pages?)
+# - Support for search pages (add new command exuadl search)
+# - Random selection (of media type. New options needed: --video, --audio, --document)
 
 
-
+Bugs:
 
 Found 118 files. 
 Found 180 files. 
