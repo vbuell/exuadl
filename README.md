@@ -1,3 +1,3 @@
-Multithread parallel console line downloader for ex.ua using wget
-=================================================================
+Multithread parallel console line downloader using wget
+=======================================================
 
